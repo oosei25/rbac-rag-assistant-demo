@@ -1,0 +1,53 @@
+# --- OS / Editor cruft ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Python bytecode / caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# --- Local data / indexes / scratch ---
+_local_index/
+index/
+indexes/
+data/
+*.db
+*.sqlite3
+
+resources/**
+
+
+# --- Secrets & config ---
+.env
+.env.*
+*.env
+*.key
+*.pem
+*.crt
+*.cert
+*.p12
+
+# Local auth tokens, cache, etc.
+*.token
+*.secrets.*
+.cache/
+.mypy_cache/
+.pytest_cache/
+
+# --- Docker / Compose local overrides & logs ---
+docker-compose.override.yml
+*.log
+logs/
+tmp/

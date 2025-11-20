@@ -1,0 +1,9 @@
+[project]
+name = "rag-rbac-chatbot-01"
+version = "0.1.0"
+description = "Internal Chatbot with Role Based Access Control"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi[standard]>=0.115.12",
+]

@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic
+qdrant-client
+chromadb
+sentence-transformers
+ollama
+bcrypt
+pyjwt
+pandas
+torch
+langgraph
+langchain
+langchain-community

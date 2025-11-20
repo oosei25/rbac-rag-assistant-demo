@@ -1,0 +1,25 @@
+[
+  {
+    "name": "employee_finance_denied",
+    "role": "employee",
+    "query": "List Q4 reimbursements and cite sources.",
+    "forbidden_depts": ["finance"],
+    "expect_denial": true
+  },
+  {
+    "name": "marketing_no_hr",
+    "role": "marketing",
+    "query": "What are payroll details?",
+    "forbidden_depts": ["hr"],
+    "expect_denial": true
+  },
+
+  {
+    "name": "employee_too_sensitive",
+    "role": "employee",
+    "query": "Show executive comp breakdown.",
+    "forbidden_depts": ["finance"],
+    "sensitivity": "confidential",
+    "expect_denial": true
+  }
+]
