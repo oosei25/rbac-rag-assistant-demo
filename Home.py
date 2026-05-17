@@ -1,5 +1,8 @@
 import os
+import time
 import uuid
+from datetime import datetime
+
 import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
@@ -22,9 +25,36 @@ DEFAULTS = {
     "login_password": "",
     "last_user_choice": "Choose a demo user…",
     "failed_logins": 0,
+    "usage_events": [],
 }
 for k, v in DEFAULTS.items():
     st.session_state.setdefault(k, v)
+
+
+def record_usage_event(
+    *,
+    username: str,
+    role: str,
+    engine: str,
+    question: str,
+    status: str,
+    duration_ms: int,
+    answer_length: int = 0,
+    source_count: int = 0,
+) -> None:
+    st.session_state.usage_events.append(
+        {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "username": username,
+            "role": role,
+            "engine": engine,
+            "question": question.strip()[:160],
+            "status": status,
+            "duration_ms": duration_ms,
+            "answer_length": answer_length,
+            "source_count": source_count,
+        }
+    )
 
 # Demo users ------------
 DEMO_USERS = [
@@ -175,25 +205,54 @@ ask_clicked = st.button(
 
 if ask_clicked:
     with st.spinner(f"Thinking with {engine}…"):
+        started = time.perf_counter()
         try:
             au = HTTPBasicAuth(*st.session_state["auth"])  # safe: only when authed
             payload = {"message": q}
             if endpoint == "/chat/graph":
-                if "thread_id" not in st.session_state:
+                if not st.session_state.get("thread_id"):
                     st.session_state["thread_id"] = f"{user}-{uuid.uuid4().hex}"
                 payload["thread_id"] = st.session_state["thread_id"]
 
             r = requests.post(f"{API}{endpoint}", json=payload, auth=au, timeout=120)
+            duration_ms = int((time.perf_counter() - started) * 1000)
             if r.ok:
                 data = r.json()
-                st.markdown(data.get("answer", ""))
+                answer = data.get("answer", "")
+                st.markdown(answer)
                 sources = data.get("sources") or []
                 if sources:
                     with st.expander("Sources"):
                         for i, s in enumerate(sources, 1):
                             st.write(f"[{i}] `{s}`")
+                record_usage_event(
+                    username=user or "",
+                    role=st.session_state.get("role", ""),
+                    engine=engine,
+                    question=q,
+                    status="ok",
+                    duration_ms=duration_ms,
+                    answer_length=len(answer),
+                    source_count=len(sources),
+                )
             else:
                 st.error(f"Error: {r.status_code} {r.text}")
+                record_usage_event(
+                    username=user or "",
+                    role=st.session_state.get("role", ""),
+                    engine=engine,
+                    question=q,
+                    status=f"http_{r.status_code}",
+                    duration_ms=duration_ms,
+                )
         except requests.exceptions.RequestException as e:
             st.error(f"Request failed: {e}")
-
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            record_usage_event(
+                username=user or "",
+                role=st.session_state.get("role", ""),
+                engine=engine,
+                question=q,
+                status="request_error",
+                duration_ms=duration_ms,
+            )

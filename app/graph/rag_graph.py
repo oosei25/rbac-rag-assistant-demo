@@ -68,6 +68,7 @@ def dbg(stage, **kw):
 
 # ---Nodes -----
 def n_intent_guard(state: RAGState) -> RAGState:
+    state["error"] = None
     state["requested_depts"] = infer_requested_departments(state["query"])
     state["allowed_depts"]   = set(allowed_departments(state["role"]))
     # Hard-deny only when SOFT=0; otherwise we let it flow (deflection/safety net will help)
@@ -139,11 +140,11 @@ def n_generate(state: RAGState) -> RAGState:
         fallback = keyword_slice_answer(state["query"], docs)
         if fallback:
             ans = sanitize_answer(fallback)
-        
-        state["answer"]  = ans
-        state["sources"] = []
-        state["stage"]   = "generated"
-        return state
+
+    state["answer"]  = ans
+    state["sources"] = [] if looks_like_deny(ans) else _unique_sources(docs)
+    state["stage"]   = "generated"
+    return state
 
 def n_validate(state: RAGState) -> RAGState:
     docs = state.get("docs") or []

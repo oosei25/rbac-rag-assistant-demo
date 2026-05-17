@@ -27,11 +27,16 @@ data/
 *.sqlite3
 
 resources/**
+!resources/
+!resources/data/
+!resources/data/**
+resources/**/.DS_Store
 
 
 # --- Secrets & config ---
 .env
 .env.*
+!.env.example
 *.env
 *.key
 *.pem

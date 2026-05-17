@@ -16,7 +16,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       VECTOR_DB: ${VECTOR_DB:-qdrant}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
@@ -35,6 +37,7 @@ services:
     ports: ["8000:8000"]
     volumes:
       - ./resources:/app/resources:ro
+      - hf_cache:/root/.cache/huggingface
 
   web:
     build:
@@ -51,3 +54,4 @@ services:
 volumes:
   qdrant_storage:
   ollama_models:
+  hf_cache:

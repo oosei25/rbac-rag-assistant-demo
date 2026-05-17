@@ -18,7 +18,7 @@ LEAK_CASES = [
 
 
 @pytest.mark.parametrize("role,question", LEAK_CASES)
-def test_no_cross_department_leak(role, question):
+def test_denies_or_omits_sources_for_cross_department_queries(role, question):
     answer, sources = generate(question, role)
     ans = (answer or "").lower()
     denied = (
