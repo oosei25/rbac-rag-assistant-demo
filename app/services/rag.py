@@ -7,7 +7,12 @@ from typing import Callable, List, Optional, Tuple
 from ollama import Client
 
 from app.policy import allowed_departments, infer_requested_departments
-from app.schemas import Citation
+from app.schemas import (
+    AccessDecisionTrace,
+    AppliedAccessFilter,
+    CandidateCounts,
+    Citation,
+)
 from app.services.indexer import indexer_service
 from app.services.rag_helpers import (
     DENY_MESSAGE,
@@ -118,23 +123,33 @@ class RagService:
     def _dept_filter(departments: set[str]) -> dict:
         return {"department": {"$in": sorted(departments)}}
 
-    def retrieve(
+    def retrieve_with_trace(
         self, query_text: str, role: str, k: Optional[int] = None
-    ) -> List[dict]:
+    ) -> Tuple[List[dict], dict]:
         k = k or self.top_k
         allowed = set(allowed_departments(role))
+        requested = infer_requested_departments(query_text)
+        diagnostics = {
+            "allowed_departments": sorted(allowed),
+            "requested_departments": sorted(requested),
+            "initial_filter_departments": sorted(allowed),
+            "fallback_filter_departments": [],
+            "authorized_after_policy": 0,
+            "authorized_after_relevance": 0,
+            "selected_for_generation": 0,
+        }
 
         # This check precedes embedding and vector search. An unknown role can
         # never turn an empty filter into an unfiltered backend request.
         if not allowed:
-            return []
+            return [], diagnostics
 
         retrieval_departments = allowed
         if self.intent_narrowing:
-            requested = infer_requested_departments(query_text)
             requested_allowed = requested & allowed
             if requested != {"general"} and requested_allowed:
                 retrieval_departments = requested_allowed
+        diagnostics["initial_filter_departments"] = sorted(retrieval_departments)
 
         vector = self.indexer.embed_one(rewrite_query(query_text))
         fetch_k = max(k * 4, 12)
@@ -155,6 +170,7 @@ class RagService:
                     self._dept_filter(allowed),
                 )
             )
+            diagnostics["fallback_filter_departments"] = sorted(allowed)
         candidates = normalize_hits(hits)
         candidates = vector_relevance_filter(candidates, self.vector_db)
 
@@ -163,17 +179,27 @@ class RagService:
         candidates = [
             item for item in candidates if item.get("department") in allowed
         ]
+        diagnostics["authorized_after_policy"] = len(candidates)
         candidates = lexical_filter(query_text, candidates)
+        diagnostics["authorized_after_relevance"] = len(candidates)
         candidates = diversify_by_path(candidates, limit=fetch_k)
         candidates = lexical_rerank(query_text, candidates, boost=0.25)
         candidates = self.reranker(query_text, candidates)
-        return candidates[:k]
+        selected = candidates[:k]
+        diagnostics["selected_for_generation"] = len(selected)
+        return selected, diagnostics
 
-    def generate_from_documents(
+    def retrieve(
+        self, query_text: str, role: str, k: Optional[int] = None
+    ) -> List[dict]:
+        documents, _diagnostics = self.retrieve_with_trace(query_text, role, k)
+        return documents
+
+    def generate_from_documents_with_reason(
         self, query_text: str, docs: List[dict]
-    ) -> Tuple[str, List[Citation]]:
+    ) -> Tuple[str, List[Citation], str]:
         if not docs:
-            return self.deny_msg, []
+            return self.deny_msg, [], "no_authorized_relevant_context"
         if self.passage_selection:
             docs = self._select_passages_llm(query_text, docs)
 
@@ -198,19 +224,67 @@ class RagService:
                 if fallback:
                     answer = sanitize_answer(fallback)
                 else:
-                    return self.deny_msg, []
+                    return self.deny_msg, [], "model_returned_no_grounded_answer"
             else:
-                return self.deny_msg, []
+                return self.deny_msg, [], "model_returned_no_grounded_answer"
 
         if not validate_answer(answer, citations):
-            return self.deny_msg, []
-        return answer, citations_for_answer(answer, citations)
+            return self.deny_msg, [], "answer_failed_citation_validation"
+        return (
+            answer,
+            citations_for_answer(answer, citations),
+            "grounded_authorized_answer",
+        )
+
+    def generate_from_documents(
+        self, query_text: str, docs: List[dict]
+    ) -> Tuple[str, List[Citation]]:
+        answer, citations, _reason = self.generate_from_documents_with_reason(
+            query_text, docs
+        )
+        return answer, citations
+
+    @staticmethod
+    def build_access_trace(
+        role: str,
+        diagnostics: dict,
+        reason: str,
+        citations: List[Citation],
+    ) -> AccessDecisionTrace:
+        if not diagnostics["allowed_departments"]:
+            reason = "role_not_authorized"
+        decision = "answered" if reason == "grounded_authorized_answer" else "denied"
+        return AccessDecisionTrace(
+            authenticated_role=role,
+            allowed_departments=diagnostics["allowed_departments"],
+            requested_departments=diagnostics["requested_departments"],
+            applied_filter=AppliedAccessFilter(
+                initial_departments=diagnostics["initial_filter_departments"],
+                fallback_departments=diagnostics["fallback_filter_departments"],
+            ),
+            candidate_counts=CandidateCounts(
+                authorized_after_policy=diagnostics["authorized_after_policy"],
+                authorized_after_relevance=diagnostics["authorized_after_relevance"],
+                selected_for_generation=diagnostics["selected_for_generation"],
+            ),
+            decision=decision,
+            reason=reason,
+            authorized_source_count=len(citations),
+        )
+
+    def generate_with_trace(
+        self, query_text: str, role: str
+    ) -> Tuple[str, List[Citation], AccessDecisionTrace]:
+        documents, diagnostics = self.retrieve_with_trace(query_text, role)
+        answer, citations, reason = self.generate_from_documents_with_reason(
+            query_text, documents
+        )
+        trace = self.build_access_trace(role, diagnostics, reason, citations)
+        return answer, citations, trace
 
     def generate(self, query_text: str, role: str) -> Tuple[str, List[Citation]]:
-        return self.generate_from_documents(
-            query_text,
-            self.retrieve(query_text, role),
-        )
+        answer, citations, _trace = self.generate_with_trace(query_text, role)
+        return answer, citations
 
 
 rag_service = RagService()
@@ -224,4 +298,17 @@ def generate(query_text: str, role: str) -> Tuple[str, List[Citation]]:
     return rag_service.generate(query_text, role)
 
 
-__all__ = ["RagBackendError", "RagService", "rag_service", "retrieve", "generate"]
+def generate_with_trace(
+    query_text: str, role: str
+) -> Tuple[str, List[Citation], AccessDecisionTrace]:
+    return rag_service.generate_with_trace(query_text, role)
+
+
+__all__ = [
+    "RagBackendError",
+    "RagService",
+    "generate",
+    "generate_with_trace",
+    "rag_service",
+    "retrieve",
+]

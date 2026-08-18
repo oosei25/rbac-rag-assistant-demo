@@ -7,6 +7,13 @@ import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
 
+from ui_components import (
+    DEMO_USERS,
+    ROLE_PRESET_QUESTIONS,
+    render_access_trace,
+    render_source_cards,
+)
+
 # --- Config -----
 API = os.environ.get("API_URL", "http://api:8000")
 try:
@@ -26,6 +33,7 @@ DEFAULTS = {
     "last_user_choice": "Choose a demo user…",
     "failed_logins": 0,
     "usage_events": [],
+    "question_input": "What is the employee handbook holiday policy?",
 }
 for k, v in DEFAULTS.items():
     st.session_state.setdefault(k, v)
@@ -56,12 +64,6 @@ def record_usage_event(
         }
     )
 
-# Demo users ------------
-DEMO_USERS = [
-    {"label": "Peter — Engineering", "username": "Peter",  "password": "pete123"},
-    {"label": "Mariam — Marketing",  "username": "Mariam", "password": "mariampass123"},
-    {"label": "Natasha — HR",        "username": "Natasha","password": "hrpass123"},
-]
 DEMO_OPTIONS = ["Choose a demo user…"] + [u["label"] for u in DEMO_USERS] + ["Custom…"]
 
 
@@ -188,11 +190,24 @@ with col_b:
     st.button("New conversation", disabled=not authed, on_click=_new_conv)
 
 # ----- Query box ------
+role_presets = ROLE_PRESET_QUESTIONS.get(st.session_state.get("role"), [])
+preset = st.selectbox(
+    "Role-specific question presets",
+    options=["Choose a preset…"] + role_presets,
+    disabled=not authed,
+    key=f"question_preset_{st.session_state.get('role') or 'signed_out'}",
+)
+if st.button(
+    "Use preset",
+    disabled=(not authed) or preset == "Choose a preset…",
+):
+    st.session_state.question_input = preset
+
 q = st.text_area(
     "Your question",
-    "Summarize the latest marketing report and cite sources.",
     height=80,
-    disabled=not authed, 
+    disabled=not authed,
+    key="question_input",
 )
 
 
@@ -221,20 +236,8 @@ if ask_clicked:
                 answer = data.get("answer", "")
                 st.markdown(answer)
                 citations = data.get("citations") or []
-                if citations:
-                    with st.expander("Citations"):
-                        for citation in citations:
-                            citation_id = citation.get("citation_id", "?")
-                            st.markdown(
-                                f"**[{citation_id}] {citation.get('title', 'Document')}**"
-                            )
-                            st.caption(
-                                f"{citation.get('department', 'unknown')} · "
-                                f"{citation.get('section', 'Document')} · "
-                                f"`{citation.get('path', '')}` · "
-                                f"score {citation.get('score', 0.0):.3f}"
-                            )
-                            st.write(citation.get("snippet", ""))
+                render_access_trace(data.get("access_trace"))
+                render_source_cards(citations)
                 record_usage_event(
                     username=user or "",
                     role=st.session_state.get("role", ""),

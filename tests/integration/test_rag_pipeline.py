@@ -63,3 +63,6 @@ def test_graph_and_direct_rag_use_the_same_deterministic_pipeline(monkeypatch):
 
     assert state["answer"] == direct_answer
     assert state["citations"] == direct_citations
+    assert state["access_trace"].decision == "answered"
+    assert state["access_trace"].authenticated_role == "employee"
+    assert state["access_trace"].authorized_source_count == len(direct_citations)

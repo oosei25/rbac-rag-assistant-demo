@@ -44,7 +44,8 @@ def test_live_stack_returns_grounded_general_answer():
     assert health["index_ready"] is True
     assert response["answer"]
     assert response["citations"]
+    assert response["access_trace"]["decision"] == "answered"
+    assert response["access_trace"]["authenticated_role"] == "employee"
     assert {citation["department"] for citation in response["citations"]} == {
         "general"
     }
-
