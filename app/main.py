@@ -19,6 +19,7 @@ from app.services.auth import auth_service
 from app.services.documents import DocumentService
 from app.services.indexer import indexer_service
 from app.services.rag import rag_service
+from app.services.threads import scoped_thread_id
 from app.graph.rag_graph import build_graph
 
 graph = build_graph()
@@ -136,8 +137,9 @@ def chat_rag(body: ChatRequest, user=Depends(auth_service.authenticate)):
 def chat_graph(body: ChatRequest, user=Depends(auth_service.authenticate)):
     if graph is None:
         return ChatResponse(answer="Graph pipeline is disabled on the server.", citations=[])
-    # stable per-user default if client didn’t send one
-    tid = body.thread_id or f"{user['username']}"
+    # Client IDs are namespaced by the authenticated principal before they
+    # reach the checkpointer, preventing cross-user checkpoint collisions.
+    tid = scoped_thread_id(user["username"], body.thread_id)
     cfg = {"configurable": {"thread_id": tid, "checkpoint_ns": "default"}}
     if not body.message or not body.message.strip():
         raise HTTPException(status_code=400, detail="Message must not be empty.")

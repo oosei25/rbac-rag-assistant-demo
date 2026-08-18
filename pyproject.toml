@@ -19,3 +19,15 @@ dependencies = [
 [project.optional-dependencies]
 web = ["requests", "streamlit"]
 dev = ["pytest"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --ignore=tests/e2e"
+markers = [
+    "unit: isolated deterministic logic tests",
+    "integration: deterministic component and API boundary tests",
+    "security: deterministic authorization and adversarial evaluations",
+    "e2e: explicitly invoked live-stack tests",
+    "model_dependent: tests that require a running vector database and LLM",
+]

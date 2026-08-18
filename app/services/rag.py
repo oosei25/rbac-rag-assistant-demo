@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from ollama import Client
 
@@ -37,7 +37,13 @@ class RagBackendError(RuntimeError):
 class RagService:
     """Coordinates an authorization-first retrieval and generation flow."""
 
-    def __init__(self, indexer=indexer_service, llm_client=None):
+    def __init__(
+        self,
+        indexer=indexer_service,
+        llm_client=None,
+        search_backend: Optional[Callable[[list[float], int, dict], List[dict]]] = None,
+        reranker: Optional[Callable[[str, List[dict]], List[dict]]] = None,
+    ):
         self.indexer = indexer
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://ollama:11434")
         self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b-instruct")
@@ -48,6 +54,8 @@ class RagService:
         self.passage_selection = os.getenv("PASSAGE_SELECTION", "0") == "1"
         self.passage_selection_k = int(os.getenv("PASSAGE_SELECTION_K", "5"))
         self.client = llm_client or Client(host=self.ollama_host)
+        self.search_backend = search_backend
+        self.reranker = reranker or cross_encoder_rerank
         self.deny_msg = DENY_MESSAGE
         self.vector_db = self.indexer.vector_db
         self._passage_instr = (
@@ -100,6 +108,8 @@ class RagService:
         return selected or docs[: self.passage_selection_k]
 
     def _search_backend(self, vector, k: int, filt: dict):
+        if self.search_backend is not None:
+            return self.search_backend(vector, k, filt)
         if self.vector_db == "qdrant":
             return qdrant_search(vector, k, filt)
         return chroma_search(vector, k, filt)
@@ -156,7 +166,7 @@ class RagService:
         candidates = lexical_filter(query_text, candidates)
         candidates = diversify_by_path(candidates, limit=fetch_k)
         candidates = lexical_rerank(query_text, candidates, boost=0.25)
-        candidates = cross_encoder_rerank(query_text, candidates)
+        candidates = self.reranker(query_text, candidates)
         return candidates[:k]
 
     def generate_from_documents(
