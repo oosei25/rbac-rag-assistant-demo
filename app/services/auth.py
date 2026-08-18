@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from typing import Callable, Dict
 
 from fastapi import Depends, HTTPException
@@ -42,23 +43,51 @@ class AuthService:
             return DEFAULT_USERS
         try:
             data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("BASIC_USERS_JSON must be an object")
             for u, rec in data.items():
-                if not isinstance(rec, dict) or "password" not in rec or "role" not in rec:
+                if (
+                    not isinstance(u, str)
+                    or not isinstance(rec, dict)
+                    or not isinstance(rec.get("password"), str)
+                    or not isinstance(rec.get("role"), str)
+                ):
                     raise ValueError(f"Invalid user record for {u}")
             return data
         except Exception as e:
             print(f"[auth] WARNING: failed to parse BASIC_USERS_JSON: {e}")
-            return DEFAULT_USERS
+            # An explicitly supplied but invalid database must fail closed;
+            # silently restoring well-known demo credentials is unsafe.
+            return {}
 
     def authenticate(
         self, credentials: HTTPBasicCredentials = Depends(security)
     ) -> Dict[str, str]:
-        username = credentials.username
-        password = credentials.password
-        rec = self._users_db.get(username)
-        if not rec or rec.get("password") != password:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        return {"username": username, "role": rec["role"]}
+        matched_user: tuple[str, Dict[str, str]] | None = None
+        supplied_username = credentials.username.encode("utf-8")
+        supplied_password = credentials.password.encode("utf-8")
+
+        # Check every demo record so unknown usernames do not take a visibly
+        # shorter path than known usernames. compare_digest avoids early-exit
+        # string comparisons for both credentials.
+        for username, record in self._users_db.items():
+            username_ok = secrets.compare_digest(
+                supplied_username, username.encode("utf-8")
+            )
+            password_ok = secrets.compare_digest(
+                supplied_password, record["password"].encode("utf-8")
+            )
+            if username_ok and password_ok:
+                matched_user = (username, record)
+
+        if matched_user is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials",
+                headers={"WWW-Authenticate": "Basic"},
+            )
+        username, record = matched_user
+        return {"username": username, "role": record["role"]}
 
     def require_roles(self, *allowed_roles: str) -> Callable:
         auth_dep = self.authenticate

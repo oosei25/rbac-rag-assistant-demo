@@ -15,11 +15,13 @@ WORKDIR /app
 # Install Python deps first (better layer caching)
 COPY requirements.api.txt /tmp/requirements.txt
 RUN python -m pip install --upgrade pip && \
-    pip install -r /tmp/requirements.txt
+    pip install torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install -r /tmp/requirements.txt
 
 # Copy app code and data
 COPY app ./app
 COPY resources ./resources
+COPY scripts ./scripts
 
 # Environment defaults (can be overridden by docker-compose or .env)
 ENV VECTOR_DB=qdrant \
@@ -28,7 +30,8 @@ ENV VECTOR_DB=qdrant \
     EMBED_BACKEND=local \
     ST_MODEL=sentence-transformers/all-MiniLM-L6-v2 \
     OLLAMA_HOST=http://ollama:11434 \
-    OLLAMA_MODEL=qwen2.5:3b-instruct
+    OLLAMA_MODEL=qwen2.5:3b-instruct \
+    AUTO_INDEX=1
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host","0.0.0.0", "--port","8000"]

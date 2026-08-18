@@ -11,10 +11,10 @@ The stack uses Streamlit for the user interface, FastAPI for the backend API, Qd
 ## Highlights
 
 - Role-scoped document retrieval across Engineering, Finance, HR, Marketing, General, and executive access levels.
-- RAG and LangGraph execution modes with source citations.
+- RAG and LangGraph execution modes with prompt-aligned structured citations.
 - Local LLM runtime through Ollama, with no hosted LLM required by default.
 - Qdrant-backed semantic search with optional Chroma support.
-- Document explorer filtered by the signed-in user's role.
+- API-backed document explorer with server-side authorization.
 - Admin reindex action for Engineering and C-level users.
 - Session-local usage analytics for demo and evaluation workflows.
 - Evaluation fixtures for correctness and RBAC leakage checks.
@@ -32,6 +32,7 @@ flowchart LR
     Rag["RAG service"]
     Graph["LangGraph workflow"]
     Indexer["Indexer service"]
+    Explorer["Authorized document API"]
   end
 
   subgraph Data["Knowledge Base"]
@@ -46,14 +47,17 @@ flowchart LR
   Streamlit -->|"HTTP + Basic Auth"| Auth
   Auth --> Rag
   Auth --> Graph
+  Auth --> Explorer
   Docs --> Indexer
+  Docs --> Explorer
   Indexer --> Qdrant
   Rag --> Qdrant
   Graph --> Qdrant
   Rag --> Ollama
   Graph --> Ollama
-  Rag --> Streamlit
-  Graph --> Streamlit
+  Rag -->|"answer + structured citations"| Streamlit
+  Graph -->|"answer + structured citations"| Streamlit
+  Explorer -->|"authorized documents only"| Streamlit
 ```
 
 ## Repository Layout
@@ -129,16 +133,9 @@ pip install -r requirements.dev.txt
 
 docker compose up -d qdrant ollama
 docker compose exec ollama ollama pull qwen2.5:3b-instruct
-
-PYTHONPATH=. \
-VECTOR_DB=qdrant \
-QDRANT_URL=http://localhost:6333 \
-OLLAMA_HOST=http://localhost:11434 \
-DATA_DIR=resources/data \
-python scripts/cli.py ingest
 ```
 
-Start the API:
+Start the API. `AUTO_INDEX=1` is the default and rebuilds the index before the API becomes ready:
 
 ```bash
 PYTHONPATH=. \
@@ -146,7 +143,7 @@ VECTOR_DB=qdrant \
 QDRANT_URL=http://localhost:6333 \
 OLLAMA_HOST=http://localhost:11434 \
 DATA_DIR=resources/data \
-AUTO_INDEX=0 \
+AUTO_INDEX=1 \
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -177,7 +174,7 @@ These credentials are for local demonstration only. Replace them with `BASIC_USE
 
 ### Chat
 
-The main chat screen supports both RAG and Graph execution modes, displays generated answers, and shows source files used for retrieval.
+The main chat screen supports both RAG and Graph execution modes, displays generated answers, and shows the authorized excerpt behind each numbered citation. Each citation includes its prompt ID, stable document ID, safe relative path, title, department, section, retrieval score, and snippet.
 
 <p align="center">
   <img src="docs/screenshot-answer.png" alt="RAG answer with citations" width="750">
@@ -185,7 +182,7 @@ The main chat screen supports both RAG and Graph execution modes, displays gener
 
 ### Document Explorer
 
-The document explorer shows only documents visible to the current role and allows simple filtering by department and text search.
+The document explorer calls authenticated FastAPI endpoints. The API filters documents by role before reading or returning their content; the Streamlit container does not contain the knowledge-base files.
 
 <p align="center">
   <img src="docs/screenshot-docs.png" alt="Document explorer" width="750">
@@ -197,15 +194,17 @@ Engineering and C-level users can trigger reindexing from the UI. The page also 
 
 ### Usage Analytics
 
-The analytics page tracks session-local request counts, engine usage, request status, latency, answer length, and source count. It is intended for local demos and lightweight validation, not durable production reporting.
+The analytics page tracks session-local request counts, engine usage, request status, latency, answer length, and citation count. It is intended for local demos and lightweight validation, not durable production reporting.
 
 ## API Endpoints
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/healthz` | Basic service health check |
+| `GET` | `/healthz` | Service and index-readiness status |
 | `GET` | `/version` | Runtime model and vector database settings |
 | `GET` | `/login` | Validate Basic Auth credentials |
+| `GET` | `/documents` | List documents authorized for the signed-in role |
+| `GET` | `/documents/{document_id}` | Read one authorized document |
 | `POST` | `/chat/rag` | Single-turn RAG answer generation |
 | `POST` | `/chat/graph` | LangGraph answer generation with thread memory |
 | `POST` | `/admin/reindex` | Rebuild vector index from `resources/data` |
@@ -232,7 +231,17 @@ resources/data/
 `-- marketing/
 ```
 
-The access policy is defined in `app/policy.py`. Each role maps to an allowed set of departments. Retrieval filters enforce the role boundary before answers are generated, and intent detection can deny or soften requests that appear to target departments outside the user's access.
+The access policy is defined in `app/policy.py`. Each known role maps to an allowed set of departments; unknown roles map to no access. Retrieval applies the role filter before content can reach the model and rechecks returned metadata defensively. Intent inference can narrow retrieval to an allowed department, but it never grants access or rejects a request.
+
+The retrieval order is:
+
+```text
+query -> embedding -> RBAC-filtered vector search -> vector threshold
+      -> lexical threshold -> diversification -> optional reranking
+      -> generation -> citation validation
+```
+
+Diversification permits up to three relevant chunks from one document so a multi-section answer does not lose necessary context.
 
 ## Configuration
 
@@ -247,9 +256,12 @@ Most runtime behavior is controlled through `.env`.
 | `ST_MODEL` | Local sentence-transformer model |
 | `OLLAMA_HOST` | Ollama server URL |
 | `OLLAMA_MODEL` | Chat model used for answer generation |
-| `AUTO_INDEX` | Reindex once on API startup when set to `1` |
-| `RBAC_INTENT` | Enable department intent detection |
-| `RBAC_INTENT_SOFT` | Soften cross-department intent to allowed/general docs |
+| `AUTO_INDEX` | Rebuild the index on API startup; defaults to `1` |
+| `INTENT_NARROWING` | Let inferred intent narrow retrieval within authorized departments |
+| `QDRANT_SCORE_MIN` | Minimum Qdrant similarity score |
+| `CHROMA_DIST_MAX` | Maximum Chroma cosine distance |
+| `LEXICAL_MIN` | Minimum query-token overlap after vector retrieval |
+| `MAX_CHUNKS_PER_DOCUMENT` | Diversification cap, constrained to `2`–`3` |
 | `RERANK_CE` | Enable optional cross-encoder reranking |
 | `PASSAGE_SELECTION` | Enable optional LLM passage selection |
 
@@ -269,14 +281,14 @@ Run the test suite:
 pytest -q
 ```
 
-The tests cover RBAC leakage scenarios and evaluation cases under `evals/`. Some tests require the embedding model and vector index to be available.
+The core suite uses deterministic model and index fakes. It covers authorization, document access, citation ordering and consistency, relevance thresholds, no unauthorized model context, intent behavior, diversification, denial consistency, Basic Auth, reindex permissions, and empty/populated health states without requiring Ollama, an embedding download, or a prebuilt index.
 
 ## Operational Notes
 
 - The first local run may download the embedding model from Hugging Face and the chat model from Ollama.
 - Docker Compose persists Qdrant, Ollama, and Hugging Face cache data in named volumes.
 - The checked-in documents are synthetic sample data for demonstration and evaluation.
-- Demo authentication uses plaintext credentials and should not be used as-is in production.
+- Demo authentication uses plaintext configured credentials with constant-time comparisons. It should still be replaced by a production identity provider outside a local demo.
 - For production use, add durable auth, encrypted secrets management, persistent analytics, monitoring, and document-level ACLs.
 
 ## Roadmap

@@ -5,7 +5,7 @@
     "query": "Summarize the latest marketing report and cite sources.",
     "must_contain": ["campaign", "Q4"],
     "must_cite_depts": ["marketing"],
-    "min_sources": 1
+    "min_citations": 1
   },
   {
     "name": "engineering_overview",
@@ -13,6 +13,6 @@
     "query": "What does the engineering master doc say about architecture?",
     "must_contain": ["architecture", "design"],
     "must_cite_depts": ["engineering"],
-    "min_sources": 1
+    "min_citations": 1
   }
 ]

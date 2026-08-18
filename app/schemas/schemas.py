@@ -1,26 +1,46 @@
-from enum import Enum
-from pydantic import BaseModel
+from __future__ import annotations
 
-class Role(str, Enum):
-    finance="finance"
-    marketing="marketing"
-    hr="hr"
-    engineering="engineering"
-    employee="employee"
-    clevel="clevel"
+from pydantic import BaseModel, Field
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
 
-class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    role: Role
+class Citation(BaseModel):
+    """A prompt-aligned, authorized source excerpt returned to clients."""
+
+    citation_id: int = Field(ge=1)
+    document_id: str
+    path: str
+    title: str
+    department: str
+    section: str
+    score: float
+    snippet: str
+
 
 class ChatRequest(BaseModel):
     message: str
+    thread_id: str | None = None
+
 
 class ChatResponse(BaseModel):
     answer: str
-    sources: list[str]  # file paths
+    citations: list[Citation]
+
+
+class DocumentSummary(BaseModel):
+    document_id: str
+    path: str
+    title: str
+    department: str
+    preview: str
+
+
+class DocumentDetail(DocumentSummary):
+    content: str
+
+
+class HealthResponse(BaseModel):
+    ok: bool
+    index_ready: bool
+    indexed_chunks: int
+    vector_db: str
+    indexing_error: str | None = None

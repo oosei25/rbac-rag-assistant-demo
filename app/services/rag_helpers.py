@@ -1,8 +1,12 @@
 import os
 import re
-from typing import List, Optional
 from collections import Counter
 import math
+import uuid
+from pathlib import PurePosixPath
+from typing import Iterable, List, Optional
+
+from app.schemas import Citation
 
 COLLECTION_NAME = "company_docs"
 DENY_MESSAGE = "I don't have enough information to answer that with your current access."
@@ -12,14 +16,16 @@ DENY_MESSAGE = "I don't have enough information to answer that with your current
 def qdrant_search(vec, k: int, filt: Optional[dict]):
     from qdrant_client import QdrantClient
     Q = QdrantClient(url=os.getenv("QDRANT_URL", "http://qdrant:6333"))
-    return Q.search(
+    response = Q.query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=vec,
+        query=vec,
         limit=k,
         query_filter=_qdrant_filter_from_dict(filt),
+        score_threshold=float(os.getenv("QDRANT_SCORE_MIN", "0.25")),
         with_payload=True,
         with_vectors=False,
     )
+    return response.points
 
 def chroma_search(vec, k: int, where: Optional[dict]):
     import chromadb
@@ -36,53 +42,69 @@ def chroma_search(vec, k: int, where: Optional[dict]):
     res = COL.query(**query_kwargs)
     metas = (res.get("metadatas", [[]]) or [[]])[0]
     dists = (res.get("distances", [[]]) or [[]])[0]
-    # normalize to (payload, distance) tuples for parity with qdrant-like objects
-    return list(zip(metas, dists))
+    max_distance = float(os.getenv("CHROMA_DIST_MAX", "0.75"))
+    # Chroma cosine distance is lower-is-better. Filter here so thresholding is
+    # performed by the backend adapter, before lexical relevance checks.
+    return [
+        (meta, distance)
+        for meta, distance in zip(metas, dists)
+        if distance is not None and float(distance) <= max_distance
+    ]
 
 def _qdrant_filter_from_dict(d: Optional[dict]):
     """Convert {'department': {'$in': [...]}} into Qdrant Filter."""
     if not d:
         return None
-    try:
-        from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
-        depts = d.get("department", {}).get("$in", [])
-        if not depts:
-            return None
-        match = MatchValue(value=depts[0]) if len(depts) == 1 else MatchAny(any=depts)
-        return Filter(must=[FieldCondition(key="department", match=match)])
-    except Exception:
-        return None
+    from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
+
+    depts = d.get("department", {}).get("$in", [])
+    if not depts:
+        raise ValueError("A department filter must contain at least one value")
+    match = MatchValue(value=depts[0]) if len(depts) == 1 else MatchAny(any=depts)
+    return Filter(must=[FieldCondition(key="department", match=match)])
 
 # ------- Post-filters --------
 
-def _normalize_hits(hits) -> List[dict]:
-    """Turn backend hits into list[dict] payloads (keep recall high)."""
+def normalize_hits(hits) -> List[dict]:
+    """Turn backend hits into scored payloads while preserving backend order."""
     out: List[dict] = []
     for h in hits or []:
         payload = getattr(h, "payload", None)
         if payload is not None:
             if payload:
-                out.append(payload)
+                item = dict(payload)
+                item["score"] = float(getattr(h, "score", 0.0) or 0.0)
+                out.append(item)
+            continue
+        if isinstance(h, dict):
+            out.append(dict(h))
             continue
         if isinstance(h, (list, tuple)) and len(h) >= 1:
             meta = h[0]
             if meta:
-                out.append(meta)
+                item = dict(meta)
+                distance = float(h[1]) if len(h) > 1 and h[1] is not None else 1.0
+                item["distance"] = distance
+                item["score"] = 1.0 - distance
+                out.append(item)
     return out
 
-def postfilter_strict(query_text: str, hits) -> List[dict]:
-    return _normalize_hits(hits)
-
-def postfilter_relaxed(query_text: str, hits) -> List[dict]:
-    return _normalize_hits(hits)
-
-def diversify_by_path(items: List[dict], limit: int) -> List[dict]:
-    seen, out = set(), []
+def diversify_by_path(
+    items: List[dict], limit: int, max_per_document: int | None = None
+) -> List[dict]:
+    if max_per_document is None:
+        max_per_document = int(os.getenv("MAX_CHUNKS_PER_DOCUMENT", "3"))
+    max_per_document = min(3, max(2, max_per_document))
+    counts: Counter[str] = Counter()
+    seen_chunks: set[str] = set()
+    out: List[dict] = []
     for d in items:
-        p = d.get("path", "")
-        if p and p in seen:
+        document_key = d.get("document_id") or d.get("path", "")
+        chunk_key = d.get("chunk_id") or f"{document_key}:{d.get('text', '')}"
+        if chunk_key in seen_chunks or counts[document_key] >= max_per_document:
             continue
-        seen.add(p)
+        seen_chunks.add(chunk_key)
+        counts[document_key] += 1
         out.append(d)
         if len(out) >= limit:
             break
@@ -119,12 +141,53 @@ def cross_encoder_rerank(query_text: str, items: List[dict]) -> List[dict]:
 # --- simple lexical rerank (BM25) -------
 
 _WORD_RE = re.compile(r"[A-Za-z0-9']+")
+_STOP_WORDS = {
+    "a", "an", "and", "are", "about", "does", "for", "from", "in", "is",
+    "it", "latest", "me", "of", "on", "say", "show", "summarize", "the",
+    "to", "what", "with",
+}
 
 def _tokens(s: str) -> List[str]:
     return [t.lower() for t in _WORD_RE.findall(s or "")]
 
+
+def lexical_relevance(query: str, text: str) -> float:
+    query_tokens = {token for token in _tokens(query) if token not in _STOP_WORDS}
+    if not query_tokens:
+        return 1.0
+    text_tokens = set(_tokens(text))
+    return len(query_tokens & text_tokens) / len(query_tokens)
+
+
+def lexical_filter(
+    query: str, items: List[dict], minimum: float | None = None
+) -> List[dict]:
+    if minimum is None:
+        minimum = float(os.getenv("LEXICAL_MIN", "0.04"))
+    relevant: List[dict] = []
+    for item in items:
+        score = lexical_relevance(query, item.get("text", ""))
+        if score >= minimum:
+            enriched = dict(item)
+            enriched["lexical_score"] = score
+            relevant.append(enriched)
+    return relevant
+
+
+def vector_relevance_filter(items: List[dict], backend: str) -> List[dict]:
+    """Apply the configured backend threshold to normalized deterministic hits."""
+    if backend == "qdrant":
+        minimum = float(os.getenv("QDRANT_SCORE_MIN", "0.25"))
+        return [item for item in items if float(item.get("score", 0.0)) >= minimum]
+    maximum = float(os.getenv("CHROMA_DIST_MAX", "0.75"))
+    return [
+        item
+        for item in items
+        if float(item.get("distance", 1.0)) <= maximum
+    ]
+
 def lexical_rerank(query: str, items: List[dict], boost: float = 0.25) -> List[dict]:
-    """Stable lexical overlap rerank. `boost` is kept for caller compatibility."""
+    """Combine normalized lexical relevance with vector similarity."""
     if len(items) <= 1:
         return items
     q_toks = _tokens(query)
@@ -153,12 +216,12 @@ def lexical_rerank(query: str, items: List[dict], boost: float = 0.25) -> List[d
     max_s = max((s for s, _ in scored), default=1.0)
     if max_s == 0:
         return items
-    # Equal scores retain the vector-store order because Python sorting is stable.
-    scored = [((s / max_s) * boost, it) for s, it in scored]
-    return [it for _, it in sorted(scored, key=lambda x: x[0], reverse=True)]
-
-# Back-compat alias if older code imports this name
-rerank_lexical = lexical_rerank
+    combined = [
+        (float(item.get("score", 0.0)) + (score / max_s) * boost, item)
+        for score, item in scored
+    ]
+    # Equal scores retain vector-store order because Python sorting is stable.
+    return [item for _, item in sorted(combined, key=lambda pair: pair[0], reverse=True)]
 
 def _wants_bullets(q: str) -> bool:
     q = " ".join((q or "").lower().split())
@@ -204,7 +267,7 @@ def _is_summary_query(q: str) -> bool:
 
 # ------- Prompt & validation ------------------
 
-def build_prompt(query_text: str, docs: List[dict], model: str):
+def build_prompt(query_text: str, citations: List[Citation]):
     summary_mode = _is_summary_query(query_text)
     num_predict = int(os.getenv(
         "LLM_NUM_PREDICT_SUMMARY" if summary_mode else "LLM_NUM_PREDICT",
@@ -213,8 +276,12 @@ def build_prompt(query_text: str, docs: List[dict], model: str):
     num_ctx     = int(os.getenv("LLM_NUM_CTX", "2048"))
 
     snippets = [
-        f"[{i+1}] ({d.get('department')}/{d.get('sensitivity','internal')}) {d.get('text','')}"
-        for i, d in enumerate(docs)
+        (
+            f"[{citation.citation_id}] "
+            f"({citation.department}; {citation.title}; {citation.section}) "
+            f"{citation.snippet}"
+        )
+        for citation in citations
     ]
     context = "\n\n".join(snippets)
 
@@ -276,15 +343,62 @@ def build_prompt(query_text: str, docs: List[dict], model: str):
         "options": {"temperature": 0.1, "num_predict": num_predict, "num_ctx": num_ctx},
     }
 
-_digit = re.compile(r"\d")
+_CITATION_MARKER = re.compile(r"\[(\d+)\]")
 
-def validate_answer(answer: str, docs: List[dict], role: str | None = None, **_ignored) -> bool:
+
+def _safe_citation_path(raw_path: str) -> str:
+    normalized = (raw_path or "").replace("\\", "/")
+    parts = [part for part in PurePosixPath(normalized).parts if part not in {"", "/"}]
+    if "data" in parts:
+        parts = parts[parts.index("data") + 1 :]
+    if not parts or ".." in parts:
+        return "document"
+    if PurePosixPath(normalized).is_absolute() and "data" not in PurePosixPath(normalized).parts:
+        parts = parts[-1:]
+    return PurePosixPath(*parts).as_posix()
+
+
+def build_citations(docs: Iterable[dict]) -> List[Citation]:
+    """Assign prompt IDs once, in final retrieval order."""
+    max_chars = int(os.getenv("CITATION_SNIPPET_CHARS", "1200"))
+    citations: List[Citation] = []
+    for citation_id, doc in enumerate(docs, 1):
+        path = _safe_citation_path(str(doc.get("path", "")))
+        document_id = str(
+            doc.get("document_id")
+            or uuid.uuid5(uuid.NAMESPACE_URL, f"rbac-rag:{path}")
+        )
+        snippet = " ".join(str(doc.get("text", "")).split())[:max_chars]
+        citations.append(
+            Citation(
+                citation_id=citation_id,
+                document_id=document_id,
+                path=path,
+                title=str(doc.get("title") or PurePosixPath(path).name),
+                department=str(doc.get("department", "")),
+                section=str(doc.get("section") or doc.get("title") or "Document"),
+                score=float(doc.get("score", 0.0) or 0.0),
+                snippet=snippet,
+            )
+        )
+    return citations
+
+
+def validate_answer(answer: str, citations: List[Citation], **_ignored) -> bool:
     if not answer:
         return False
-    if os.getenv("STRICT_CITATIONS", "0") == "1":
-        if _digit.search(answer) and "[" not in answer:
-            return False
-    return True
+    if looks_like_deny(answer):
+        return True
+    cited_ids = [int(match) for match in _CITATION_MARKER.findall(answer)]
+    valid_ids = {citation.citation_id for citation in citations}
+    return bool(cited_ids) and all(citation_id in valid_ids for citation_id in cited_ids)
+
+
+def citations_for_answer(answer: str, citations: List[Citation]) -> List[Citation]:
+    cited_ids = {int(match) for match in _CITATION_MARKER.findall(answer)}
+    return [
+        citation for citation in citations if citation.citation_id in cited_ids
+    ]
 
 
 # ------------ spacing / markdown fixes ----------------------
@@ -428,16 +542,22 @@ def _best_lines_for_query(query: str, text: str) -> List[str]:
 def keyword_slice_answer(query: str, docs: List[dict], max_chars: int = 400) -> str:
     """
     Deterministic fallback: extract 1-3 relevant policy sentences from retrieved docs.
-    Returns a short answer with a single bracket citation [1] to satisfy the UI.
+    Keep each excerpt tied to its original prompt citation ID.
     """
-    lines: List[str] = []
-    for d in docs:
-        lines.extend(_best_lines_for_query(query, d.get("text", "")))
-        if sum(len(x) for x in lines) >= max_chars:
+    cited_lines: List[str] = []
+    for citation_id, document in enumerate(docs, 1):
+        lines = _best_lines_for_query(query, document.get("text", ""))
+        if lines:
+            marker = f" [{citation_id}]"
+            used = sum(len(line) + 1 for line in cited_lines)
+            remaining = max_chars - used - len(marker)
+            if remaining <= 0:
+                break
+            cited_lines.append(f"{' '.join(lines)[:remaining].rstrip()}{marker}")
+        if sum(len(line) for line in cited_lines) >= max_chars:
             break
-    if not lines:
+    if not cited_lines:
         return ""
-    snippet = " ".join(lines)
+    snippet = " ".join(cited_lines)
     snippet = re.sub(r"\s+", " ", snippet).strip()
-    # append a single generic citation marker; sources shown separately
-    return f"{snippet} [1]"
+    return snippet

@@ -14,18 +14,20 @@ if not events:
     st.stop()
 
 df = pd.DataFrame(events)
+if "citation_count" not in df:
+    df["citation_count"] = df.get("source_count", 0)
 
 total_questions = len(df)
 success_count = int((df["status"] == "ok").sum())
 success_rate = success_count / total_questions if total_questions else 0
 avg_latency = int(df["duration_ms"].mean()) if total_questions else 0
-avg_sources = round(float(df["source_count"].mean()), 1) if total_questions else 0.0
+avg_citations = round(float(df["citation_count"].mean()), 1) if total_questions else 0.0
 
 cols = st.columns(4)
 cols[0].metric("Questions", total_questions)
 cols[1].metric("Success rate", f"{success_rate:.0%}")
 cols[2].metric("Avg latency", f"{avg_latency} ms")
-cols[3].metric("Avg sources", avg_sources)
+cols[3].metric("Avg citations", avg_citations)
 
 st.divider()
 
@@ -64,7 +66,7 @@ st.dataframe(
             "engine",
             "status",
             "duration_ms",
-            "source_count",
+            "citation_count",
             "question",
         ]
     ].sort_values("timestamp", ascending=False),

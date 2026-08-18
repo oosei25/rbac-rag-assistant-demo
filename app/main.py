@@ -1,34 +1,45 @@
 from __future__ import annotations
 
+import asyncio
 import os
-from pathlib import Path
 from contextlib import asynccontextmanager
-from typing import List
-from ollama import Client
-from fastapi import FastAPI, Depends
-from fastapi import HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
+from ollama import Client
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.schemas import (
+    ChatRequest,
+    ChatResponse,
+    DocumentDetail,
+    DocumentSummary,
+    HealthResponse,
+)
+from app.services.auth import auth_service
+from app.services.documents import DocumentService
 from app.services.indexer import indexer_service
 from app.services.rag import rag_service
-from app.services.auth import auth_service
 from app.graph.rag_graph import build_graph
 
 graph = build_graph()
 
-# --- Lifespan (optional auto-index with marker to avoid repeats) ---
-INDEX_MARKER = Path("/tmp/.rag_indexed")
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if os.getenv("AUTO_INDEX") == "1" and not INDEX_MARKER.exists():
-        try:
-            count = indexer_service.reindex()
-            print(f"[startup] indexed chunks: {count}")
-            INDEX_MARKER.touch()
-        except Exception as e:
-            print("[startup] auto-index failed:", e)
+    app.state.indexing_error = None
+    if os.getenv("AUTO_INDEX", "1") == "1":
+        for attempt in range(1, 6):
+            try:
+                count = indexer_service.reindex()
+                print(f"[startup] indexed chunks: {count}")
+                if count:
+                    app.state.indexing_error = None
+                    break
+                app.state.indexing_error = "No indexable documents found"
+            except Exception as exc:
+                print(f"[startup] auto-index attempt {attempt} failed:", exc)
+                app.state.indexing_error = type(exc).__name__
+            if attempt < 5:
+                await asyncio.sleep(2)
 
     # Warm the LLM once so first user call isn't slow
     try:
@@ -45,8 +56,14 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title="RAG-RBAC Chatbot", lifespan=lifespan)
+app.state.indexing_error = None
+document_service = DocumentService(indexer_service.data_dir)
 
-_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:8501").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
@@ -54,15 +71,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# --- Models ---
-class ChatRequest(BaseModel):
-    message: str
-    thread_id: str | None = None
-
-class ChatResponse(BaseModel):
-    answer: str
-    sources: List[str]
-
 # --- Routes ---
 @app.get("/login")
 def login(user=Depends(auth_service.authenticate)):
@@ -77,16 +85,38 @@ def admin_reindex(_user=Depends(auth_service.require_roles("engineering", "cleve
     n = indexer_service.reindex()
     return {"indexed_chunks": n}
 
-@app.get("/healthz")
+@app.get("/healthz", response_model=HealthResponse)
 def healthz():
-    return {"ok": True}
+    status = indexer_service.index_status()
+    return HealthResponse(
+        ok=True,
+        index_ready=status["ready"],
+        indexed_chunks=status["indexed_chunks"],
+        vector_db=status["vector_db"],
+        indexing_error=app.state.indexing_error or status["error"],
+    )
 
 @app.get("/version")
 def version():
     return {
-        "ollama_model": os.getenv("OLLAMA_MODEL", "qwen2.5:3b-instruct"),
-        "vector_db": os.getenv("VECTOR_DB", "qdrant"),
+        "ollama_model": rag_service.ollama_model,
+        "vector_db": indexer_service.vector_db,
     }
+
+
+@app.get("/documents", response_model=list[DocumentSummary])
+def list_documents(user=Depends(auth_service.authenticate)):
+    return document_service.list_for_role(user["role"])
+
+
+@app.get("/documents/{document_id}", response_model=DocumentDetail)
+def get_document(document_id: str, user=Depends(auth_service.authenticate)):
+    document = document_service.get_for_role(document_id, user["role"])
+    if document is None:
+        # Use the same response for missing and unauthorized IDs so callers
+        # cannot enumerate the existence of restricted documents.
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document
 
 
 # ---RAG endpoint ----
@@ -95,8 +125,8 @@ def chat_rag(body: ChatRequest, user=Depends(auth_service.authenticate)):
     if not body.message or not body.message.strip():
         raise HTTPException(status_code=400, detail="Message must not be empty.")
     try:
-        answer, sources = rag_service.generate(body.message, user["role"])
-        return ChatResponse(answer=answer, sources=sources)
+        answer, citations = rag_service.generate(body.message, user["role"])
+        return ChatResponse(answer=answer, citations=citations)
     except Exception as e:
         # Avoids leaking internals to clients
         raise HTTPException(status_code=500, detail="RAG pipeline error.") from e
@@ -105,7 +135,7 @@ def chat_rag(body: ChatRequest, user=Depends(auth_service.authenticate)):
 @app.post("/chat/graph", response_model=ChatResponse)
 def chat_graph(body: ChatRequest, user=Depends(auth_service.authenticate)):
     if graph is None:
-        return ChatResponse(answer="Graph pipeline is disabled on the server.", sources=[])
+        return ChatResponse(answer="Graph pipeline is disabled on the server.", citations=[])
     # stable per-user default if client didn’t send one
     tid = body.thread_id or f"{user['username']}"
     cfg = {"configurable": {"thread_id": tid, "checkpoint_ns": "default"}}
@@ -113,6 +143,9 @@ def chat_graph(body: ChatRequest, user=Depends(auth_service.authenticate)):
         raise HTTPException(status_code=400, detail="Message must not be empty.")
     try:
         result = graph.invoke({"query": body.message, "role": user["role"]}, config=cfg)
-        return ChatResponse(answer=result.get("answer",""), sources=result.get("sources",[]))
+        return ChatResponse(
+            answer=result.get("answer", ""),
+            citations=result.get("citations", []),
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail="Graph pipeline error.") from e
