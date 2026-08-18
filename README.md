@@ -12,6 +12,9 @@ The stack uses Streamlit for the user interface, FastAPI for the backend API, Qd
 
 - Role-scoped document retrieval across Engineering, Finance, HR, Marketing, General, and executive access levels.
 - RAG and LangGraph execution modes with prompt-aligned structured citations.
+- Safe access-decision traces with role policy, department filters, authorized candidate counts, and decision reasons.
+- Structured source cards with expandable authorized excerpts instead of path-oriented citation displays.
+- C-level-gated Security Lab comparisons for evaluating one question under two demo roles.
 - Local LLM runtime through Ollama, with no hosted LLM required by default.
 - Qdrant-backed semantic search with optional Chroma support.
 - API-backed document explorer with server-side authorization.
@@ -31,6 +34,7 @@ flowchart LR
     Auth["Basic auth and RBAC"]
     Rag["RAG service"]
     Graph["LangGraph workflow"]
+    Lab["Security Lab comparison"]
     Indexer["Indexer service"]
     Explorer["Authorized document API"]
   end
@@ -47,12 +51,14 @@ flowchart LR
   Streamlit -->|"HTTP + Basic Auth"| Auth
   Auth --> Rag
   Auth --> Graph
+  Auth --> Lab
   Auth --> Explorer
   Docs --> Indexer
   Docs --> Explorer
   Indexer --> Qdrant
   Rag --> Qdrant
   Graph --> Qdrant
+  Lab --> Rag
   Rag --> Ollama
   Graph --> Ollama
   Rag -->|"answer + structured citations"| Streamlit
@@ -73,7 +79,7 @@ flowchart LR
 |   `-- policy.py           # Role-to-department access policy
 |-- docs/                   # Screenshots
 |-- evals/                  # Deterministic fixtures, fakes, and report runner
-|-- pages/                  # Streamlit multipage views
+|-- pages/                  # Explorer, analytics, admin, and Security Lab views
 |-- resources/data/         # Sample department documents
 |-- scripts/                # CLI utilities
 |-- tests/                  # Unit, integration, security, and explicit E2E tiers
@@ -174,7 +180,10 @@ These credentials are for local demonstration only. Replace them with `BASIC_USE
 
 ### Chat
 
-The main chat screen supports both RAG and Graph execution modes, displays generated answers, and shows the authorized excerpt behind each numbered citation. Each citation includes its prompt ID, stable document ID, safe relative path, title, department, section, retrieval score, and snippet.
+The main chat screen supports both RAG and Graph execution modes. Each response
+includes a safe access-decision trace and structured source cards showing the
+citation number, title, department, section, relevance score, and expandable
+authorized excerpt. Rejected document metadata is never included in the trace.
 
 <p align="center">
   <img src="docs/screenshot-answer.png" alt="RAG answer with citations" width="750">
@@ -196,6 +205,18 @@ Engineering and C-level users can trigger reindexing from the UI. The page also 
 
 The analytics page tracks session-local request counts, engine usage, request status, latency, answer length, and citation count. It is intended for local demos and lightweight validation, not durable production reporting.
 
+### Security Lab
+
+The Security Lab evaluates the same question under two selected demo roles and
+renders their answers, traces, and source cards side-by-side. Presets demonstrate
+Marketing versus HR on payroll, Employee versus HR on compensation, Marketing
+versus Finance on financial results, and Engineering versus C-level on a mixed
+department request.
+
+Because one side can contain information unavailable to the signed-in role, the
+comparison API and page require the C-level demo account. This keeps the
+explainability feature from becoming a cross-role data-access bypass.
+
 ## API Endpoints
 
 | Method | Path | Description |
@@ -207,6 +228,7 @@ The analytics page tracks session-local request counts, engine usage, request st
 | `GET` | `/documents/{document_id}` | Read one authorized document |
 | `POST` | `/chat/rag` | Single-turn RAG answer generation |
 | `POST` | `/chat/graph` | LangGraph answer generation with thread memory |
+| `POST` | `/security-lab/compare` | C-level-only side-by-side evaluation under two demo roles |
 | `POST` | `/admin/reindex` | Rebuild vector index from `resources/data` |
 
 Example RAG request:

@@ -15,6 +15,7 @@ RUN python -m pip install --upgrade pip && \
     pip install -r /tmp/requirements.txt
 
 COPY Home.py ./Home.py
+COPY ui_components.py ./ui_components.py
 COPY pages ./pages
 
 ENV API_URL=http://api:8000

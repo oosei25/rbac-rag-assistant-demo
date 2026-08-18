@@ -14,6 +14,9 @@ from app.schemas import (
     DocumentDetail,
     DocumentSummary,
     HealthResponse,
+    SecurityLabRequest,
+    SecurityLabResponse,
+    SecurityLabResult,
 )
 from app.services.auth import auth_service
 from app.services.documents import DocumentService
@@ -126,8 +129,14 @@ def chat_rag(body: ChatRequest, user=Depends(auth_service.authenticate)):
     if not body.message or not body.message.strip():
         raise HTTPException(status_code=400, detail="Message must not be empty.")
     try:
-        answer, citations = rag_service.generate(body.message, user["role"])
-        return ChatResponse(answer=answer, citations=citations)
+        answer, citations, access_trace = rag_service.generate_with_trace(
+            body.message, user["role"]
+        )
+        return ChatResponse(
+            answer=answer,
+            citations=citations,
+            access_trace=access_trace,
+        )
     except Exception as e:
         # Avoids leaking internals to clients
         raise HTTPException(status_code=500, detail="RAG pipeline error.") from e
@@ -148,6 +157,41 @@ def chat_graph(body: ChatRequest, user=Depends(auth_service.authenticate)):
         return ChatResponse(
             answer=result.get("answer", ""),
             citations=result.get("citations", []),
+            access_trace=result.get("access_trace"),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail="Graph pipeline error.") from e
+
+
+@app.post("/security-lab/compare", response_model=SecurityLabResponse)
+def compare_security_roles(
+    body: SecurityLabRequest,
+    _user=Depends(auth_service.require_roles("clevel")),
+):
+    question = body.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question must not be empty.")
+    try:
+        left_answer, left_citations, left_trace = rag_service.generate_with_trace(
+            question, body.left_role
+        )
+        right_answer, right_citations, right_trace = rag_service.generate_with_trace(
+            question, body.right_role
+        )
+        return SecurityLabResponse(
+            question=question,
+            left=SecurityLabResult(
+                role=body.left_role,
+                answer=left_answer,
+                citations=left_citations,
+                access_trace=left_trace,
+            ),
+            right=SecurityLabResult(
+                role=body.right_role,
+                answer=right_answer,
+                citations=right_citations,
+                access_trace=right_trace,
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Security comparison failed.") from exc
