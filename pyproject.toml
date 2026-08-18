@@ -5,5 +5,17 @@ description = "Internal Chatbot with Role Based Access Control"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "chromadb",
     "fastapi[standard]>=0.115.12",
+    "langgraph",
+    "ollama",
+    "openai",
+    "pandas",
+    "pyyaml",
+    "qdrant-client",
+    "sentence-transformers",
 ]
+
+[project.optional-dependencies]
+web = ["requests", "streamlit"]
+dev = ["pytest"]

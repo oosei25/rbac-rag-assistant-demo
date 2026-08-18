@@ -15,10 +15,17 @@ def main():
         n = indexer_service.reindex()
         print(f"Indexed chunks: {n}")
     else:
-        ans, src = rag_service.generate(
+        answer, citations = rag_service.generate(
             args.q or "What do we know about company events?", args.role
         )
-        print(ans, "\n\nSources:", *src, sep="\n- ")
+        print(answer)
+        if citations:
+            print("\nCitations:")
+            for citation in citations:
+                print(
+                    f"[{citation.citation_id}] {citation.title} "
+                    f"({citation.department}) - {citation.path}"
+                )
 
 
 if __name__ == "__main__":

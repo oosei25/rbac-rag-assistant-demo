@@ -32,10 +32,11 @@ SENS_BY_ROLE = {
 _WORD_BOUNDARY_TOKENS = {"api","roi","hr"}  # short tokens prone to false positives
 
 def allowed_departments(role: str) -> List[str]:
-    return sorted(ROLE_TO_DEPTS.get(role, {"general"}))
+    # Unknown, missing, and unauthenticated roles have no implicit access.
+    return sorted(ROLE_TO_DEPTS.get(role, set()))
 
 def allowed_sensitivities(role: str) -> Set[str]:
-    return set(SENS_BY_ROLE.get(role, {"internal"}))
+    return set(SENS_BY_ROLE.get(role, set()))
 
 def _normalize(s: str) -> str:
     s = s.lower()

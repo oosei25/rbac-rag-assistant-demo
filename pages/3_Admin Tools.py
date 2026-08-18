@@ -27,7 +27,14 @@ with status_cols[0]:
     try:
         health = requests.get(f"{API}/healthz", timeout=5)
         if health.ok:
-            st.success("API is reachable.")
+            health_data = health.json()
+            if health_data.get("index_ready"):
+                st.success(
+                    f"API is reachable and {health_data.get('indexed_chunks', 0)} "
+                    "chunks are indexed."
+                )
+            else:
+                st.warning("API is reachable, but the document index is empty.")
         else:
             st.error(f"API health check failed with HTTP {health.status_code}.")
     except requests.exceptions.RequestException as exc:

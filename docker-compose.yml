@@ -4,6 +4,11 @@ services:
     ports: ["6333:6333"]
     volumes:
       - qdrant_storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   ollama:
     image: ollama/ollama:latest
@@ -11,6 +16,11 @@ services:
     volumes:
       - ollama_models:/root/.ollama
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   api:
     build:
@@ -27,17 +37,27 @@ services:
       ST_MODEL: ${ST_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:3b-instruct}"
-      AUTO_INDEX: ${AUTO_INDEX:-0}
-      RBAC_INTENT: "${RBAC_INTENT:-1}"
-      RBAC_INTENT_SOFT: "${RBAC_INTENT_SOFT:-1}"
-      RETRIEVAL_FILTERS: "${RETRIEVAL_FILTERS:-1}"
+      AUTO_INDEX: ${AUTO_INDEX:-1}
+      INTENT_NARROWING: "${INTENT_NARROWING:-1}"
+      QDRANT_SCORE_MIN: "${QDRANT_SCORE_MIN:-0.25}"
+      CHROMA_DIST_MAX: "${CHROMA_DIST_MAX:-0.75}"
+      LEXICAL_MIN: "${LEXICAL_MIN:-0.04}"
+      MAX_CHUNKS_PER_DOCUMENT: "${MAX_CHUNKS_PER_DOCUMENT:-3}"
     depends_on:
-      - qdrant
-      - ollama
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
     ports: ["8000:8000"]
     volumes:
       - ./resources:/app/resources:ro
       - hf_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; assert json.load(urllib.request.urlopen('http://localhost:8000/healthz'))['index_ready']"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
 
   web:
     build:
@@ -46,10 +66,9 @@ services:
     environment:
       API_URL: http://api:8000
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports: ["8501:8501"]
-    volumes:
-      - .:/app
 
 volumes:
   qdrant_storage:

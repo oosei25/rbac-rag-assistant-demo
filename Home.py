@@ -40,7 +40,7 @@ def record_usage_event(
     status: str,
     duration_ms: int,
     answer_length: int = 0,
-    source_count: int = 0,
+    citation_count: int = 0,
 ) -> None:
     st.session_state.usage_events.append(
         {
@@ -52,7 +52,7 @@ def record_usage_event(
             "status": status,
             "duration_ms": duration_ms,
             "answer_length": answer_length,
-            "source_count": source_count,
+            "citation_count": citation_count,
         }
     )
 
@@ -153,7 +153,7 @@ with st.container():
 - Two execution modes:
   - **RAG** — fast, single-turn answers with citations.
   - **Graph (LangGraph)** — stateful, multi-step RAG pipeline with conversation memory per **Thread**.
-- Answers cite the exact files used. Access is limited by your role (e.g., Marketing can’t see HR docs).
+- Answers return numbered, authorized citation excerpts. Access is limited by your role (e.g., Marketing can’t see HR docs).
         """
     )
 
@@ -220,11 +220,21 @@ if ask_clicked:
                 data = r.json()
                 answer = data.get("answer", "")
                 st.markdown(answer)
-                sources = data.get("sources") or []
-                if sources:
-                    with st.expander("Sources"):
-                        for i, s in enumerate(sources, 1):
-                            st.write(f"[{i}] `{s}`")
+                citations = data.get("citations") or []
+                if citations:
+                    with st.expander("Citations"):
+                        for citation in citations:
+                            citation_id = citation.get("citation_id", "?")
+                            st.markdown(
+                                f"**[{citation_id}] {citation.get('title', 'Document')}**"
+                            )
+                            st.caption(
+                                f"{citation.get('department', 'unknown')} · "
+                                f"{citation.get('section', 'Document')} · "
+                                f"`{citation.get('path', '')}` · "
+                                f"score {citation.get('score', 0.0):.3f}"
+                            )
+                            st.write(citation.get("snippet", ""))
                 record_usage_event(
                     username=user or "",
                     role=st.session_state.get("role", ""),
@@ -233,7 +243,7 @@ if ask_clicked:
                     status="ok",
                     duration_ms=duration_ms,
                     answer_length=len(answer),
-                    source_count=len(sources),
+                    citation_count=len(citations),
                 )
             else:
                 st.error(f"Error: {r.status_code} {r.text}")

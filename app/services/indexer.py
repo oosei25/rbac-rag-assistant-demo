@@ -1,9 +1,20 @@
 
-import os, glob, uuid, yaml, hashlib
+import glob
+import hashlib
+import os
 import re
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
+import yaml
+
+from app.services.documents import (
+    canonical_document_id,
+    department_from_path,
+    document_title,
+    safe_document_path,
+)
 from app.utils.chunk import chunk_text
 from app.utils.io import read_file
 
@@ -27,11 +38,13 @@ class IndexerService:
         self._chroma_collection = None
         self._qdrant_client = None
 
-        self._init_embedder()
-        self._init_vector_backend()
+        # Heavy embedding models and backend connections are initialized on
+        # first use, keeping imports and deterministic tests infrastructure-free.
 
     # -------Embeds
     def _init_embedder(self) -> None:
+        if self.embed_model is not None:
+            return
         if self.embed_backend == "openai":
             from openai import OpenAI
 
@@ -48,6 +61,7 @@ class IndexerService:
     def embed_many(self, texts: List[str]) -> List[List[float]]:
         if not texts:
             return []
+        self._init_embedder()
         if self.embed_backend == "openai":
             resp = self._openai_client.embeddings.create(
                 model=self.embed_model,
@@ -69,6 +83,8 @@ class IndexerService:
 
     # ------Vector DB
     def _init_vector_backend(self) -> None:
+        if self._qdrant_client is not None or self._chroma_client is not None:
+            return
         if self.vector_db == "qdrant":
             from qdrant_client import QdrantClient
 
@@ -83,52 +99,35 @@ class IndexerService:
                 self.collection_name, metadata={"hnsw:space": "cosine"}
             )
 
-    def _ensure_collection(self) -> None:
+    def _reset_collection(self) -> None:
+        self._init_vector_backend()
         if self.vector_db != "qdrant":
+            self._chroma_client.delete_collection(self.collection_name)
+            self._chroma_collection = self._chroma_client.get_or_create_collection(
+                self.collection_name, metadata={"hnsw:space": "cosine"}
+            )
             return
         from qdrant_client.models import Distance, PayloadSchemaType, VectorParams
 
-        try:
-            names = [c.name for c in self._qdrant_client.get_collections().collections]
-        except Exception:
-            names = []
-        if self.collection_name not in names:
-            self._qdrant_client.recreate_collection(
-                self.collection_name,
-                vectors_config=VectorParams(size=self.embed_dim, distance=Distance.COSINE),
-            )
-            for field in ("doc_id", "department"):
-                try:
-                    self._qdrant_client.create_payload_index(
-                        collection_name=self.collection_name,
-                        field_name=field,
-                        field_schema=PayloadSchemaType.KEYWORD,
-                    )
-                except Exception as e:
-                    print(f"[indexer] create_payload_index({field}) skipped: {e}")
-
-    def _delete_doc(self, doc_id: str) -> None:
-        if self.vector_db == "qdrant":
-            from qdrant_client.models import FieldCondition, Filter, MatchValue
-
+        names = [c.name for c in self._qdrant_client.get_collections().collections]
+        if self.collection_name in names:
+            self._qdrant_client.delete_collection(self.collection_name)
+        self._qdrant_client.create_collection(
+            self.collection_name,
+            vectors_config=VectorParams(size=self.embed_dim, distance=Distance.COSINE),
+        )
+        for field in ("document_id", "department"):
             try:
-                self._qdrant_client.delete(
+                self._qdrant_client.create_payload_index(
                     collection_name=self.collection_name,
-                    points_selector=Filter(
-                        must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
-                    ),
-                    wait=True,
+                    field_name=field,
+                    field_schema=PayloadSchemaType.KEYWORD,
                 )
-            except Exception as e:
-                print(f"[indexer] qdrant delete_doc({doc_id}) failed: {e}")
-            return
-
-        try:
-            self._chroma_collection.delete(where={"doc_id": doc_id})
-        except Exception as e:
-            print(f"[indexer] chroma delete_doc({doc_id}) failed: {e}")
+            except Exception as exc:
+                print(f"[indexer] create_payload_index({field}) skipped: {exc}")
 
     def _upsert_batch(self, points: List[Dict[str, Any]]) -> None:
+        self._init_vector_backend()
         if self.vector_db == "qdrant":
             from uuid import UUID, uuid4
             from qdrant_client.models import PointStruct
@@ -159,59 +158,52 @@ class IndexerService:
         self._chroma_collection.upsert(ids=ids, embeddings=embs, metadatas=metas)
 
     # --------Helpers
-    @staticmethod
-    def _dept_from_path(p: Path) -> str:
-        try:
-            i = p.parts.index("data")
-            return p.parts[i + 1]
-        except ValueError:
-            return "general"
-
     def _sidecar_for(self, p: Path) -> Dict[str, Any]:
         cand = self.data_dir.parent / "metadata" / f"{p.stem}.yml"
         if cand.exists():
             return yaml.safe_load(cand.read_text()) or {}
         return {}
 
-    def _doc_meta(self, p: Path) -> Dict[str, Any]:
+    def _doc_meta(self, p: Path, content: str) -> Dict[str, Any]:
         base = {
-            "path": str(p),
-            "department": self._dept_from_path(p),
+            "path": safe_document_path(p, self.data_dir),
+            "department": department_from_path(p, self.data_dir),
             "sensitivity": "internal",
             "tenant_id": "default",
-            "title": p.name,
-            "doc_id": str(uuid.uuid5(uuid.NAMESPACE_URL, str(p.resolve()))),
+            "title": document_title(p, content),
+            "document_id": canonical_document_id(p, self.data_dir),
             "source_url": None,
             "version": "v1",
         }
-        base.update(self._sidecar_for(p))
+        sidecar = self._sidecar_for(p)
+        for field in ("sensitivity", "tenant_id", "title", "source_url", "version"):
+            if field in sidecar:
+                base[field] = sidecar[field]
         return base
 
     @staticmethod
     def _stable_chunk_id(doc_id: str, chunk_text: str, idx: int) -> str:
-        h = hashlib.sha1(
+        content_hash = hashlib.sha1(
             f"{doc_id}|{idx}|".encode("utf-8") + chunk_text.encode("utf-8")
         ).hexdigest()
-        return h
+        return str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"rbac-rag-chunk:{content_hash}")
+        )
 
     # ------ Reindex
     def reindex(self, batch_size: int = 64) -> int:
-        self._ensure_collection()
-        files = [
+        self._init_embedder()
+        files = sorted(
             Path(f) for f in glob.glob(str(self.data_dir / "**/*.*"), recursive=True)
-        ]
-        n, batch = 0, []
+        )
+        points: List[Dict[str, Any]] = []
 
         for fp in files:
             text = read_file(fp)
             if not text:
                 continue
 
-            meta = self._doc_meta(fp)
-            try:
-                self._delete_doc(meta["doc_id"])
-            except Exception as e:
-                print(f"[indexer] delete_doc failed for {meta['doc_id']}: {e}")
+            meta = self._doc_meta(fp, text)
 
             for idx, ch in enumerate(chunk_text(text)):
                 ch_text = ch["text"] if isinstance(ch, dict) else str(ch)
@@ -221,9 +213,18 @@ class IndexerService:
                 )
 
                 vec = self.embed_one(ch_text)
-                sid = self._stable_chunk_id(meta["doc_id"], ch_text, idx)
+                sid = self._stable_chunk_id(meta["document_id"], ch_text, idx)
 
-                payload = {**meta, "text": ch_text, "section": section}
+                payload = {
+                    key: value
+                    for key, value in {
+                        **meta,
+                        "chunk_id": sid,
+                        "text": ch_text,
+                        "section": section,
+                    }.items()
+                    if value is not None
+                }
 
                 p = fp.name.lower()
                 for q in ("q4", "q3", "q2", "q1"):
@@ -234,17 +235,42 @@ class IndexerService:
                 if m:
                     payload["year"] = m.group(1)
 
-                batch.append({"id": sid, "vector": vec, "payload": payload})
+                points.append({"id": sid, "vector": vec, "payload": payload})
 
-                if len(batch) >= batch_size:
-                    self._upsert_batch(batch)
-                    n += len(batch)
-                    batch.clear()
+        self._reset_collection()
+        for start in range(0, len(points), batch_size):
+            self._upsert_batch(points[start : start + batch_size])
+        return len(points)
 
-        if batch:
-            self._upsert_batch(batch)
-            n += len(batch)
-        return n
+    def index_status(self) -> Dict[str, Any]:
+        """Return a backend-neutral readiness snapshot without mutating state."""
+        try:
+            self._init_vector_backend()
+            if self.vector_db == "qdrant":
+                names = {
+                    collection.name
+                    for collection in self._qdrant_client.get_collections().collections
+                }
+                if self.collection_name not in names:
+                    count = 0
+                else:
+                    info = self._qdrant_client.get_collection(self.collection_name)
+                    count = int(info.points_count or 0)
+            else:
+                count = int(self._chroma_collection.count())
+            return {
+                "ready": count > 0,
+                "indexed_chunks": count,
+                "vector_db": self.vector_db,
+                "error": None,
+            }
+        except Exception as exc:
+            return {
+                "ready": False,
+                "indexed_chunks": 0,
+                "vector_db": self.vector_db,
+                "error": type(exc).__name__,
+            }
 
 
 indexer_service = IndexerService()
