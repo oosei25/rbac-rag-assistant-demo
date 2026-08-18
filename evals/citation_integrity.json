@@ -1,0 +1,34 @@
+[
+  {
+    "name": "valid_single_reference",
+    "query": "What is the general handbook holiday policy?",
+    "document_departments": ["general"],
+    "llm_response": "The handbook evidence is GENERALEVIDENCE1042 [1].",
+    "expect_denial": false,
+    "expected_citation_ids": [1]
+  },
+  {
+    "name": "invalid_out_of_range_reference",
+    "query": "What is the general handbook holiday policy?",
+    "document_departments": ["general"],
+    "llm_response": "The handbook evidence is GENERALEVIDENCE1042 [99].",
+    "expect_denial": true,
+    "expected_citation_ids": []
+  },
+  {
+    "name": "missing_reference",
+    "query": "What is the general handbook holiday policy?",
+    "document_departments": ["general"],
+    "llm_response": "The handbook evidence is GENERALEVIDENCE1042.",
+    "expect_denial": true,
+    "expected_citation_ids": []
+  },
+  {
+    "name": "referenced_subset_only",
+    "query": "Compare the general handbook and engineering architecture.",
+    "document_departments": ["general", "engineering"],
+    "llm_response": "The engineering evidence is ENGINEERINGEVIDENCE9074 [2].",
+    "expect_denial": false,
+    "expected_citation_ids": [2]
+  }
+]

@@ -1,0 +1,37 @@
+[
+  {"name":"employee_general","role":"employee","target_department":"general","allowed":true,"query":"general handbook holiday","evidence":"GENERALEVIDENCE1042"},
+  {"name":"employee_finance","role":"employee","target_department":"finance","allowed":false,"query":"finance budget revenue reimbursement","evidence":"FINANCEEVIDENCE4821"},
+  {"name":"employee_marketing","role":"employee","target_department":"marketing","allowed":false,"query":"marketing campaign market","evidence":"MARKETINGEVIDENCE7390"},
+  {"name":"employee_hr","role":"employee","target_department":"hr","allowed":false,"query":"HR payroll benefits compensation","evidence":"HREVIDENCE6153"},
+  {"name":"employee_engineering","role":"employee","target_department":"engineering","allowed":false,"query":"engineering architecture API deployment","evidence":"ENGINEERINGEVIDENCE9074"},
+
+  {"name":"finance_general","role":"finance","target_department":"general","allowed":true,"query":"general handbook holiday","evidence":"GENERALEVIDENCE1042"},
+  {"name":"finance_finance","role":"finance","target_department":"finance","allowed":true,"query":"finance budget revenue reimbursement","evidence":"FINANCEEVIDENCE4821"},
+  {"name":"finance_marketing","role":"finance","target_department":"marketing","allowed":false,"query":"marketing campaign market","evidence":"MARKETINGEVIDENCE7390"},
+  {"name":"finance_hr","role":"finance","target_department":"hr","allowed":false,"query":"HR payroll benefits compensation","evidence":"HREVIDENCE6153"},
+  {"name":"finance_engineering","role":"finance","target_department":"engineering","allowed":false,"query":"engineering architecture API deployment","evidence":"ENGINEERINGEVIDENCE9074"},
+
+  {"name":"marketing_general","role":"marketing","target_department":"general","allowed":true,"query":"general handbook holiday","evidence":"GENERALEVIDENCE1042"},
+  {"name":"marketing_finance","role":"marketing","target_department":"finance","allowed":false,"query":"finance budget revenue reimbursement","evidence":"FINANCEEVIDENCE4821"},
+  {"name":"marketing_marketing","role":"marketing","target_department":"marketing","allowed":true,"query":"marketing campaign market","evidence":"MARKETINGEVIDENCE7390"},
+  {"name":"marketing_hr","role":"marketing","target_department":"hr","allowed":false,"query":"HR payroll benefits compensation","evidence":"HREVIDENCE6153"},
+  {"name":"marketing_engineering","role":"marketing","target_department":"engineering","allowed":false,"query":"engineering architecture API deployment","evidence":"ENGINEERINGEVIDENCE9074"},
+
+  {"name":"hr_general","role":"hr","target_department":"general","allowed":true,"query":"general handbook holiday","evidence":"GENERALEVIDENCE1042"},
+  {"name":"hr_finance","role":"hr","target_department":"finance","allowed":false,"query":"finance budget revenue reimbursement","evidence":"FINANCEEVIDENCE4821"},
+  {"name":"hr_marketing","role":"hr","target_department":"marketing","allowed":false,"query":"marketing campaign market","evidence":"MARKETINGEVIDENCE7390"},
+  {"name":"hr_hr","role":"hr","target_department":"hr","allowed":true,"query":"HR payroll benefits compensation","evidence":"HREVIDENCE6153"},
+  {"name":"hr_engineering","role":"hr","target_department":"engineering","allowed":false,"query":"engineering architecture API deployment","evidence":"ENGINEERINGEVIDENCE9074"},
+
+  {"name":"engineering_general","role":"engineering","target_department":"general","allowed":true,"query":"general handbook holiday","evidence":"GENERALEVIDENCE1042"},
+  {"name":"engineering_finance","role":"engineering","target_department":"finance","allowed":false,"query":"finance budget revenue reimbursement","evidence":"FINANCEEVIDENCE4821"},
+  {"name":"engineering_marketing","role":"engineering","target_department":"marketing","allowed":false,"query":"marketing campaign market","evidence":"MARKETINGEVIDENCE7390"},
+  {"name":"engineering_hr","role":"engineering","target_department":"hr","allowed":false,"query":"HR payroll benefits compensation","evidence":"HREVIDENCE6153"},
+  {"name":"engineering_engineering","role":"engineering","target_department":"engineering","allowed":true,"query":"engineering architecture API deployment","evidence":"ENGINEERINGEVIDENCE9074"},
+
+  {"name":"clevel_general","role":"clevel","target_department":"general","allowed":true,"query":"general handbook holiday","evidence":"GENERALEVIDENCE1042"},
+  {"name":"clevel_finance","role":"clevel","target_department":"finance","allowed":true,"query":"finance budget revenue reimbursement","evidence":"FINANCEEVIDENCE4821"},
+  {"name":"clevel_marketing","role":"clevel","target_department":"marketing","allowed":true,"query":"marketing campaign market","evidence":"MARKETINGEVIDENCE7390"},
+  {"name":"clevel_hr","role":"clevel","target_department":"hr","allowed":true,"query":"HR payroll benefits compensation","evidence":"HREVIDENCE6153"},
+  {"name":"clevel_engineering","role":"clevel","target_department":"engineering","allowed":true,"query":"engineering architecture API deployment","evidence":"ENGINEERINGEVIDENCE9074"}
+]

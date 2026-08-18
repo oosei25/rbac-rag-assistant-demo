@@ -1,0 +1,38 @@
+[
+  {
+    "name": "employee_general_and_finance",
+    "role": "employee",
+    "query": "Compare the general handbook holiday policy with the finance budget revenue.",
+    "required_evidence": ["GENERALEVIDENCE1042"],
+    "required_cite_depts": ["general"],
+    "forbidden_depts": ["finance"],
+    "forbidden_evidence": ["FINANCEEVIDENCE4821"]
+  },
+  {
+    "name": "marketing_campaign_and_payroll",
+    "role": "marketing",
+    "query": "Summarize the marketing campaign and the HR payroll compensation.",
+    "required_evidence": ["MARKETINGEVIDENCE7390"],
+    "required_cite_depts": ["marketing"],
+    "forbidden_depts": ["hr"],
+    "forbidden_evidence": ["HREVIDENCE6153"]
+  },
+  {
+    "name": "engineering_architecture_and_budget",
+    "role": "engineering",
+    "query": "Explain the engineering API architecture and finance reimbursement budget.",
+    "required_evidence": ["ENGINEERINGEVIDENCE9074"],
+    "required_cite_depts": ["engineering"],
+    "forbidden_depts": ["finance"],
+    "forbidden_evidence": ["FINANCEEVIDENCE4821"]
+  },
+  {
+    "name": "finance_forecast_and_performance_reviews",
+    "role": "finance",
+    "query": "Summarize the finance revenue forecast and HR performance review compensation.",
+    "required_evidence": ["FINANCEEVIDENCE4821"],
+    "required_cite_depts": ["finance"],
+    "forbidden_depts": ["hr"],
+    "forbidden_evidence": ["HREVIDENCE6153"]
+  }
+]

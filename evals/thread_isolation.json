@@ -1,0 +1,34 @@
+[
+  {
+    "name": "same_client_id_different_users",
+    "left_username": "Emma",
+    "left_thread_id": "shared-thread",
+    "right_username": "Sam",
+    "right_thread_id": "shared-thread",
+    "expect_equal": false
+  },
+  {
+    "name": "same_user_same_client_id_is_stable",
+    "left_username": "Emma",
+    "left_thread_id": "project-alpha",
+    "right_username": "Emma",
+    "right_thread_id": "project-alpha",
+    "expect_equal": true
+  },
+  {
+    "name": "same_user_different_client_ids",
+    "left_username": "Emma",
+    "left_thread_id": "project-alpha",
+    "right_username": "Emma",
+    "right_thread_id": "project-beta",
+    "expect_equal": false
+  },
+  {
+    "name": "default_threads_are_user_scoped",
+    "left_username": "Mariam",
+    "left_thread_id": null,
+    "right_username": "Natasha",
+    "right_thread_id": null,
+    "expect_equal": false
+  }
+]

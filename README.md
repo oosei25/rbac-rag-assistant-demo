@@ -17,7 +17,7 @@ The stack uses Streamlit for the user interface, FastAPI for the backend API, Qd
 - API-backed document explorer with server-side authorization.
 - Admin reindex action for Engineering and C-level users.
 - Session-local usage analytics for demo and evaluation workflows.
-- Evaluation fixtures for correctness and RBAC leakage checks.
+- Deterministic correctness, authorization, adversarial, citation, and thread-isolation evaluations.
 
 ## Architecture
 
@@ -72,11 +72,11 @@ flowchart LR
 |   |-- main.py             # FastAPI application
 |   `-- policy.py           # Role-to-department access policy
 |-- docs/                   # Screenshots
-|-- evals/                  # Evaluation cases
+|-- evals/                  # Deterministic fixtures, fakes, and report runner
 |-- pages/                  # Streamlit multipage views
 |-- resources/data/         # Sample department documents
 |-- scripts/                # CLI utilities
-|-- tests/                  # RBAC and evaluation tests
+|-- tests/                  # Unit, integration, security, and explicit E2E tiers
 |-- Home.py                 # Streamlit entrypoint
 |-- docker-compose.yml      # Qdrant, Ollama, API, and web services
 `-- requirements*.txt       # Runtime and development dependencies
@@ -275,13 +275,42 @@ Install development dependencies:
 pip install -r requirements.dev.txt
 ```
 
-Run the test suite:
+Run every deterministic tier (no model, vector database, network, or indexed data required):
 
 ```bash
-pytest -q
+make test
 ```
 
-The core suite uses deterministic model and index fakes. It covers authorization, document access, citation ordering and consistency, relevance thresholds, no unauthorized model context, intent behavior, diversification, denial consistency, Basic Auth, reindex permissions, and empty/populated health states without requiring Ollama, an embedding download, or a prebuilt index.
+Run one deterministic tier:
+
+```bash
+make test-unit
+make test-integration
+make test-security
+```
+
+Generate machine-readable JSON and human-readable Markdown security evidence:
+
+```bash
+make security-report
+```
+
+The generated report records measured case counts, policy-matrix passes and
+failures, unauthorized source/content leaks, citation failures,
+thread-isolation failures, and the observed leakage rate. Authorized matrix
+cells and mixed-scope cases must return grounded evidence, so a broken retriever
+cannot pass by returning a generic denial for every request.
+
+The live model-dependent tier is isolated from the deterministic default. Start
+the full stack, then invoke it explicitly:
+
+```bash
+E2E_API_URL=http://localhost:8000 make test-e2e
+```
+
+When explicitly selected, unavailable infrastructure is a failure rather than a
+skip. This keeps local or CI orchestration responsible for provisioning the
+model and vector services.
 
 ## Operational Notes
 
